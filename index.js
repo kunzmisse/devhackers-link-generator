@@ -7,14 +7,30 @@ const path = require('path');
 const { Octokit } = require('@octokit/rest');
 
 const app = express();
-const upload = multer({ dest: 'uploads/' });
 const linkMap = new Map();
 
 // Configuration GitHub
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const GITHUB_OWNER = 'toge021';
-const GITHUB_REPO = 'Media';
-const GITHUB_BRANCH = 'main';
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'toge021';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'Media';
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || 'main';
+
+// Vérification que le token existe
+if (!GITHUB_TOKEN) {
+    console.error('❌ ERREUR: GITHUB_TOKEN non défini dans les variables d\'environnement');
+    process.exit(1);
+}
+
+// Configuration multer pour Railway (utilise /tmp)
+const upload = multer({ 
+    dest: '/tmp/uploads/',
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB max
+});
+
+// Créer le dossier /tmp/uploads s'il n'existe pas
+if (!fs.existsSync('/tmp/uploads')) {
+    fs.mkdirSync('/tmp/uploads', { recursive: true });
+}
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
@@ -36,7 +52,8 @@ function sanitizeFilename(filename) {
 function generateObfuscatedPath(originalName) {
     const ext = path.extname(originalName);
     const randomName = crypto.randomBytes(16).toString('hex');
-    return `uploads/${randomName}${ext}`;
+    // Changé de 'uploads/' à 'media/' pour éviter confusion
+    return `media/${randomName}${ext}`;
 }
 
 async function uploadToGitHub(filePath, originalName) {
@@ -58,10 +75,13 @@ async function uploadToGitHub(filePath, originalName) {
             sha = existingFile.data.sha;
         } catch (e) {
             // Fichier n'existe pas, on continue
+            if (e.status !== 404) {
+                console.warn('Erreur check existence:', e.message);
+            }
         }
 
         // Upload du fichier
-        const response = await octokit.repos.createOrUpdateFileContents({
+        await octokit.repos.createOrUpdateFileContents({
             owner: GITHUB_OWNER,
             repo: GITHUB_REPO,
             path: obfuscatedPath,
@@ -81,10 +101,16 @@ async function uploadToGitHub(filePath, originalName) {
 
 // Route d'upload
 app.post('/upload', upload.single('file'), async (req, res) => {
+    let tempFilePath = null;
     try {
-        if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
+        if (!req.file) {
+            return res.status(400).json({ error: 'Aucun fichier' });
+        }
+        tempFilePath = req.file.path;
 
-        const githubUrl = await uploadToGitHub(req.file.path, req.file.originalname);
+        console.log(`📤 Upload: ${req.file.originalname} (${req.file.size} bytes)`);
+        
+        const githubUrl = await uploadToGitHub(tempFilePath, req.file.originalname);
         const shortCode = generateShortCode();
         const fileExt = path.extname(req.file.originalname).toLowerCase();
 
@@ -109,17 +135,25 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             filename: req.file.originalname
         });
 
-        fs.unlink(req.file.path, () => {});
+        // Nettoyer le fichier temporaire
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+        }
 
+        console.log(`✅ Upload réussi: ${shortCode} -> ${githubUrl}`);
+        
         res.json({
             success: true,
             shortUrl: `/f/${shortCode}/${encodeURIComponent(req.file.originalname)}`,
-            originalName: req.file.originalname
+            originalName: req.file.originalname,
+            githubUrl: githubUrl // Optionnel: à retirer si vous voulez cacher l'URL
         });
 
     } catch (err) {
-        console.error('Erreur upload:', err);
-        if (req.file?.path) fs.unlink(req.file.path, () => {});
+        console.error('❌ Erreur upload:', err);
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            try { fs.unlinkSync(tempFilePath); } catch(e) {}
+        }
         res.status(500).json({ error: err.message });
     }
 });
@@ -128,21 +162,45 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 app.get('/f/:code/:filename?', async (req, res) => {
     const code = req.params.code;
     const entry = linkMap.get(code);
-    if (!entry) return res.status(404).send('Lien invalide ou expiré');
+    if (!entry) {
+        return res.status(404).send('Lien invalide ou expiré');
+    }
 
     try {
         const response = await fetch(entry.githubUrl);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
         
         res.setHeader('Content-Type', entry.mime);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(entry.filename)}"`);
         response.body.pipe(res);
     } catch (err) {
-        console.error('Erreur proxy:', err.message);
+        console.error('❌ Erreur proxy:', err.message);
         res.status(502).send('Erreur lors de la récupération du fichier');
     }
 });
 
-app.listen(3000, () => {
-    console.log('Serveur démarré sur http://localhost:3000');
+// Route de santé pour Railway
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Gestionnaire d'erreurs global
+app.use((err, req, res, next) => {
+    console.error('❌ Erreur serveur:', err);
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'FILE_TOO_LARGE') {
+            return res.status(413).json({ error: 'Fichier trop volumineux (max 100MB)' });
+        }
+        return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Erreur interne du serveur' });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`✅ Serveur démarré sur le port ${PORT}`);
+    console.log(`📁 GitHub Repo: ${GITHUB_OWNER}/${GITHUB_REPO}`);
+    console.log(`🔑 Token GitHub: ${GITHUB_TOKEN ? '✅ Configuré' : '❌ Manquant'}`);
 });
