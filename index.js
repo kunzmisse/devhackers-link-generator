@@ -7,7 +7,6 @@ const path = require('path');
 const { Octokit } = require('@octokit/rest');
 
 const app = express();
-const linkMap = new Map();
 
 // Configuration GitHub
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
@@ -37,8 +36,15 @@ const octokit = new Octokit({ auth: GITHUB_TOKEN });
 app.use(express.static('public'));
 app.use(express.json());
 
+// Génère un code court de 4 caractères (chiffres et lettres)
 function generateShortCode() {
-    return crypto.randomBytes(6).toString('base64url');
+    // 4 caractères aléatoires (0-9, a-z, A-Z)
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let result = '';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
 }
 
 function sanitizeFilename(filename) {
@@ -49,19 +55,18 @@ function sanitizeFilename(filename) {
         .replace(/__+/g, '_');
 }
 
-// ULTRA COURT - nom de fichier de seulement 4 caractères hexadécimaux!
+// Nom de fichier ultra court sur GitHub (4 caractères + extension)
 function generateObfuscatedPath(originalName) {
     const ext = path.extname(originalName);
-    // 2 bytes = 4 caractères hexadécimaux (65536 combinaisons possibles)
+    // 4 caractères hexadécimaux = 2 bytes (65536 combinaisons)
     const shortName = crypto.randomBytes(2).toString('hex');
-    return `m/${shortName}${ext}`;
+    return `${shortName}${ext}`;
 }
 
 async function uploadToGitHub(filePath, originalName) {
     const buffer = fs.readFileSync(filePath);
     const content = buffer.toString('base64');
-    const cleanName = sanitizeFilename(originalName) || 'file.bin';
-    const obfuscatedPath = generateObfuscatedPath(cleanName);
+    const obfuscatedPath = generateObfuscatedPath(originalName);
     
     try {
         // Vérifier si le fichier existe déjà
@@ -86,7 +91,7 @@ async function uploadToGitHub(filePath, originalName) {
             owner: GITHUB_OWNER,
             repo: GITHUB_REPO,
             path: obfuscatedPath,
-            message: `Upload: ${cleanName}`,
+            message: `Upload: ${obfuscatedPath}`,
             content: content,
             branch: GITHUB_BRANCH,
             sha: sha
@@ -100,72 +105,108 @@ async function uploadToGitHub(filePath, originalName) {
     }
 }
 
-// Route d'upload - encode l'URL GitHub dans le shortCode
+// Route d'upload - retourne un lien ultra court (4 caractères)
 app.post('/upload', upload.single('file'), async (req, res) => {
     let tempFilePath = null;
     try {
-        if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
+        if (!req.file) {
+            return res.status(400).json({ error: 'Aucun fichier' });
+        }
         tempFilePath = req.file.path;
 
+        // Upload vers GitHub
         const githubUrl = await uploadToGitHub(tempFilePath, req.file.originalname);
-        const fileExt = path.extname(req.file.originalname).toLowerCase();
+        
+        // Générer un code court de 4 caractères
+        const shortCode = generateShortCode();
 
-        // Encode l'URL GitHub en base64url pour la cacher dans l'URL
-        const encoded = Buffer.from(githubUrl).toString('base64url');
+        // Nettoyer le fichier temporaire
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+        }
 
-        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-
-        // URL ultra courte! Juste /f/{encoded}
+        // Retourner l'URL ultra courte
         res.json({
             success: true,
-            shortUrl: `/f/${encoded}`,
-            originalName: req.file.originalname
+            shortUrl: `/${shortCode}`,
+            originalName: req.file.originalname,
+            githubUrl: githubUrl
         });
 
     } catch (err) {
-        if (tempFilePath && fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch(e) {}
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            try { fs.unlinkSync(tempFilePath); } catch(e) {}
+        }
+        console.error('Upload error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Route proxy - décode l'URL GitHub depuis le shortCode (sans paramètre filename)
-app.get('/f/:encoded', async (req, res) => {
+// Route pour rediriger vers l'URL GitHub
+app.get('/:shortCode', async (req, res) => {
     try {
-        const githubUrl = Buffer.from(req.params.encoded, 'base64url').toString('utf8');
+        const { shortCode } = req.params;
         
-        // Vérification que c'est bien une URL GitHub (sécurité)
-        if (!githubUrl.startsWith('https://raw.githubusercontent.com/')) {
-            return res.status(400).send('Lien invalide');
+        // Vérifier que le shortCode fait 4 caractères
+        if (shortCode.length !== 4) {
+            return res.status(404).send('Lien non trouvé');
         }
 
-        // Extraire le nom du fichier depuis l'URL GitHub
-        const urlParts = githubUrl.split('/');
-        const fullFilename = urlParts[urlParts.length - 1];
-        const filename = decodeURIComponent(fullFilename);
-        const fileExt = path.extname(filename).toLowerCase();
-
+        // Reconstruire l'URL GitHub à partir du shortCode
+        
+        // Solution: essayer de trouver le fichier avec le shortCode + n'importe quelle extension
+        const extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.pdf', '.txt', '.bin'];
+        
+        let foundUrl = null;
+        let foundExt = null;
+        
+        for (const ext of extensions) {
+            const testPath = `${shortCode}${ext}`;
+            const testUrl = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${testPath}`;
+            
+            try {
+                const response = await fetch(testUrl, { method: 'HEAD' });
+                if (response.ok) {
+                    foundUrl = testUrl;
+                    foundExt = ext;
+                    break;
+                }
+            } catch (e) {
+                // Continuer avec l'extension suivante
+            }
+        }
+        
+        if (!foundUrl) {
+            return res.status(404).send('Fichier non trouvé');
+        }
+        
+        // Déterminer le MIME type
         let mime = 'application/octet-stream';
-        if (['.jpg','.jpeg'].includes(fileExt)) mime = 'image/jpeg';
-        else if (fileExt === '.png') mime = 'image/png';
-        else if (fileExt === '.gif') mime = 'image/gif';
-        else if (fileExt === '.webp') mime = 'image/webp';
-        else if (fileExt === '.mp4') mime = 'video/mp4';
-        else if (fileExt === '.webm') mime = 'video/webm';
-        else if (fileExt === '.mov') mime = 'video/quicktime';
-        else if (fileExt === '.mp3') mime = 'audio/mpeg';
-        else if (fileExt === '.pdf') mime = 'application/pdf';
-
-        const response = await fetch(githubUrl);
-        if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
-
+        if (['.jpg','.jpeg'].includes(foundExt)) mime = 'image/jpeg';
+        else if (foundExt === '.png') mime = 'image/png';
+        else if (foundExt === '.gif') mime = 'image/gif';
+        else if (foundExt === '.webp') mime = 'image/webp';
+        else if (foundExt === '.mp4') mime = 'video/mp4';
+        else if (foundExt === '.webm') mime = 'video/webm';
+        else if (foundExt === '.mov') mime = 'video/quicktime';
+        else if (foundExt === '.mp3') mime = 'audio/mpeg';
+        else if (foundExt === '.pdf') mime = 'application/pdf';
+        
+        // Récupérer et envoyer le fichier
+        const response = await fetch(foundUrl);
+        if (!response.ok) {
+            throw new Error(`GitHub HTTP ${response.status}`);
+        }
+        
+        const filename = `${shortCode}${foundExt}`;
         res.setHeader('Content-Type', mime);
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
-
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        
         const arrayBuffer = await response.arrayBuffer();
         res.send(Buffer.from(arrayBuffer));
-
+        
     } catch (err) {
-        console.error('❌ Erreur proxy:', err.message);
+        console.error('❌ Erreur:', err.message);
         res.status(502).send('Erreur: ' + err.message);
     }
 });
