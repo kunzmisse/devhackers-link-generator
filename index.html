@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Shadow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            background: radial-gradient(circle at 20% 30%, #0a0f1e, #03060c);
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1.5rem;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Particules canvas */
+        #particles-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .glass-card {
+            position: relative;
+            z-index: 2;
+            backdrop-filter: blur(16px);
+            background: rgba(15, 25, 45, 0.45);
+            border-radius: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.05);
+            padding: 2rem 2rem 2.5rem;
+            width: 100%;
+            max-width: 600px;
+            transition: all 0.3s ease;
+        }
+
+        h1 {
+            font-size: 2.4rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #fff, #aaccff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            text-align: center;
+            letter-spacing: -0.3px;
+            margin-bottom: 0.5rem;
+        }
+
+        .sub {
+            text-align: center;
+            color: #9aaec0;
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px dashed rgba(255,255,255,0.2);
+            display: inline-block;
+            width: auto;
+            margin-left: auto;
+            margin-right: auto;
+            padding-bottom: 0.6rem;
+        }
+
+        .dropzone {
+            border: 2px dashed rgba(255, 255, 255, 0.35);
+            border-radius: 1.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2.2rem 1rem;
+            text-align: center;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-bottom: 1.8rem;
+        }
+
+        .dropzone.drag-over {
+            border-color: #4c9aff;
+            background: rgba(76, 154, 255, 0.1);
+            transform: scale(0.98);
+        }
+
+        .dropzone p {
+            color: #cddcec;
+            font-weight: 500;
+        }
+
+        .file-label {
+            background: linear-gradient(105deg, #2a3a5a, #1a2a40);
+            padding: 0.7rem 1.4rem;
+            border-radius: 3rem;
+            display: inline-block;
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .file-label:hover {
+            background: #2f4172;
+            transform: scale(1.02);
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        button {
+            background: rgba(80, 130, 220, 0.85);
+            backdrop-filter: blur(4px);
+            border: none;
+            width: 100%;
+            padding: 0.9rem;
+            border-radius: 3rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 0.5rem;
+            border: 1px solid rgba(255,255,255,0.3);
+            letter-spacing: 0.3px;
+        }
+
+        button:hover {
+            background: #3f7ae0;
+            transform: scale(1.01);
+            box-shadow: 0 10px 20px -5px #1e3a8a80;
+        }
+
+        .result-area {
+            margin-top: 2rem;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 1.2rem;
+            padding: 1.2rem;
+            transition: 0.2s;
+            word-break: break-all;
+        }
+
+        .link-box {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            background: #0a0f1acc;
+            border-radius: 2rem;
+            padding: 0.5rem 0.5rem 0.5rem 1rem;
+            margin-top: 0.6rem;
+        }
+
+        .link-box input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #bbddff;
+            font-size: 0.85rem;
+            padding: 0.6rem 0;
+            outline: none;
+            font-family: monospace;
+        }
+
+        .copy-btn {
+            background: #2c3e66;
+            width: auto;
+            padding: 0.4rem 1rem;
+            margin: 0;
+            border-radius: 2rem;
+            font-size: 0.75rem;
+        }
+
+        .toast-msg {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e2a3aee;
+            backdrop-filter: blur(8px);
+            padding: 0.6rem 1.4rem;
+            border-radius: 40px;
+            color: white;
+            font-size: 0.85rem;
+            z-index: 10;
+            pointer-events: none;
+            transition: 0.2s;
+            opacity: 0;
+        }
+
+        .loader {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid white;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.7s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+<canvas id="particles-canvas"></canvas>
+<div class="glass-card">
+    <h1>⬤ SHADOW UPLOAD</h1>
+    <div style="text-align: center;"><span class="sub">Generateur de lien direct</span></div>
+
+    <div class="dropzone" id="dropzone">
+        <p>📁 Glissez / déposez un fichier</p>
+        <p style="font-size: 0.7rem; margin-top: 8px;">max 200 Mo · image · vidéo · audio · js · pdf · tout format</p>
+        <label class="file-label" for="fileInput">✚ Choisir un fichier</label>
+        <input type="file" id="fileInput">
+    </div>
+
+    <button id="uploadBtn">⚡ Uploader & générer lien court</button>
+
+    <div class="result-area" id="resultArea" style="display: none;">
+        <div style="font-size: 0.8rem; opacity:0.7;">✨ Lien direct (cache catbox) :</div>
+        <div class="link-box">
+            <input type="text" id="shortLinkInput" readonly>
+            <button class="copy-btn" id="copyBtn">Copier</button>
+        </div>
+        <div style="font-size: 0.7rem; margin-top: 10px; text-align: center; color:#8fabc3;">le vrai hébergeur est masqué · redirection transparente</div>
+    </div>
+</div>
+<div id="toast" class="toast-msg">Copié !</div>
+
+<script>
+    // PARTICULES (style noir/bleu)
+    const canvas = document.getElementById('particles-canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let particles = [];
+
+    function resizeCanvas() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    class Particle {
+        constructor() {
+            this.x = Math.random() * width;
+            this.y = Math.random() * height;
+            this.vx = (Math.random() - 0.5) * 0.4;
+            this.vy = (Math.random() - 0.5) * 0.2;
+            this.radius = Math.random() * 2 + 1;
+            this.alpha = Math.random() * 0.4 + 0.1;
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            if (this.x < 0) this.x = width;
+            if (this.x > width) this.x = 0;
+            if (this.y < 0) this.y = height;
+            if (this.y > height) this.y = 0;
+        }
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(100, 170, 255, ${this.alpha})`;
+            ctx.fill();
+        }
+    }
+
+    function initParticles(count = 90) {
+        particles = [];
+        for (let i = 0; i < count; i++) particles.push(new Particle());
+    }
+
+    function animateParticles() {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, width, height);
+        particles.forEach(p => {
+            p.update();
+            p.draw();
+        });
+        requestAnimationFrame(animateParticles);
+    }
+
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        initParticles(100);
+    });
+    resizeCanvas();
+    initParticles(100);
+    animateParticles();
+
+    // ---------- LOGIQUE UPLOAD ----------
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const resultArea = document.getElementById('resultArea');
+    const shortLinkInput = document.getElementById('shortLinkInput');
+    const copyBtn = document.getElementById('copyBtn');
+    const toast = document.getElementById('toast');
+
+    let selectedFile = null;
+
+    function showToast(msg) {
+        toast.textContent = msg;
+        toast.style.opacity = '1';
+        setTimeout(() => toast.style.opacity = '0', 1800);
+    }
+
+    dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('drag-over');
+    });
+    dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('drag-over');
+    });
+    dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length) {
+            selectedFile = e.dataTransfer.files[0];
+            fileInput.files = e.dataTransfer.files;
+            showToast(`📎 ${selectedFile.name}`);
+        }
+    });
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) {
+            selectedFile = e.target.files[0];
+            showToast(`📁 ${selectedFile.name}`);
+        }
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+        if (!selectedFile) {
+            showToast('❌ Aucun fichier sélectionné');
+            return;
+        }
+        if (selectedFile.size > 200 * 1024 * 1024) {
+            showToast('⚠️ Fichier > 200 Mo (limite catbox)');
+            return;
+        }
+
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = '<span class="loader"></span> Upload en cours...';
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        try {
+            const res = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || 'Erreur serveur');
+
+            const fullLink = `${window.location.origin}${data.shortUrl}`;
+            shortLinkInput.value = fullLink;
+            resultArea.style.display = 'block';
+            showToast('✅ Lien court généré !');
+        } catch (err) {
+            console.error(err);
+            showToast(`⚠️ ${err.message}`);
+        } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.innerHTML = '⚡ Uploader & générer lien court';
+        }
+    });
+
+    copyBtn.addEventListener('click', () => {
+        if (!shortLinkInput.value) return;
+        navigator.clipboard.writeText(shortLinkInput.value);
+        showToast('📋 Lien copié !');
+    });
+</script>
+</body>
+</html>
