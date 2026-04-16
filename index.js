@@ -99,23 +99,48 @@ async function uploadToGitHub(filePath, originalName) {
     }
 }
 
-// Route d'upload
+// Route d'upload - encode l'URL GitHub dans le shortCode
 app.post('/upload', upload.single('file'), async (req, res) => {
     let tempFilePath = null;
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'Aucun fichier' });
-        }
+        if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
         tempFilePath = req.file.path;
 
-        console.log(`📤 Upload: ${req.file.originalname} (${req.file.size} bytes)`);
-        
         const githubUrl = await uploadToGitHub(tempFilePath, req.file.originalname);
-        const shortCode = generateShortCode();
         const fileExt = path.extname(req.file.originalname).toLowerCase();
 
+        // Encode l'URL GitHub en base64url pour la cacher dans l'URL
+        const encoded = Buffer.from(githubUrl).toString('base64url');
+
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+
+        res.json({
+            success: true,
+            shortUrl: `/f/${encoded}/${encodeURIComponent(req.file.originalname)}`,
+            originalName: req.file.originalname
+        });
+
+    } catch (err) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) try { fs.unlinkSync(tempFilePath); } catch(e) {}
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Route proxy - décode l'URL GitHub depuis le shortCode
+app.get('/f/:encoded/:filename?', async (req, res) => {
+    try {
+        const githubUrl = Buffer.from(req.params.encoded, 'base64url').toString('utf8');
+        
+        // Vérification que c'est bien une URL GitHub (sécurité)
+        if (!githubUrl.startsWith('https://raw.githubusercontent.com/')) {
+            return res.status(400).send('Lien invalide');
+        }
+
+        const filename = req.params.filename ? decodeURIComponent(req.params.filename) : 'file';
+        const fileExt = path.extname(filename).toLowerCase();
+
         let mime = 'application/octet-stream';
-        if (['.jpg', '.jpeg'].includes(fileExt)) mime = 'image/jpeg';
+        if (['.jpg','.jpeg'].includes(fileExt)) mime = 'image/jpeg';
         else if (fileExt === '.png') mime = 'image/png';
         else if (fileExt === '.gif') mime = 'image/gif';
         else if (fileExt === '.webp') mime = 'image/webp';
@@ -123,66 +148,20 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         else if (fileExt === '.webm') mime = 'video/webm';
         else if (fileExt === '.mov') mime = 'video/quicktime';
         else if (fileExt === '.mp3') mime = 'audio/mpeg';
-        else if (fileExt === '.wav') mime = 'audio/wav';
-        else if (fileExt === '.ogg') mime = 'audio/ogg';
-        else if (['.js', '.mjs'].includes(fileExt)) mime = 'application/javascript';
-        else if (fileExt === '.css') mime = 'text/css';
         else if (fileExt === '.pdf') mime = 'application/pdf';
 
-        linkMap.set(shortCode, {
-            githubUrl: githubUrl,
-            mime: mime,
-            filename: req.file.originalname
-        });
+        const response = await fetch(githubUrl);
+        if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
 
-        // Nettoyer le fichier temporaire
-        if (tempFilePath && fs.existsSync(tempFilePath)) {
-            fs.unlinkSync(tempFilePath);
-        }
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
 
-        console.log(`✅ Upload réussi: ${shortCode} -> ${githubUrl}`);
-        
-        res.json({
-            success: true,
-            shortUrl: `/f/${shortCode}/${encodeURIComponent(req.file.originalname)}`,
-            originalName: req.file.originalname,
-            githubUrl: githubUrl // Optionnel: à retirer si vous voulez cacher l'URL
-        });
-
-    } catch (err) {
-        console.error('❌ Erreur upload:', err);
-        if (tempFilePath && fs.existsSync(tempFilePath)) {
-            try { fs.unlinkSync(tempFilePath); } catch(e) {}
-        }
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Route proxy pour masquer la source GitHub
-app.get('/f/:code/:filename?', async (req, res) => {
-    const code = req.params.code;
-    const entry = linkMap.get(code);
-    if (!entry) {
-        return res.status(404).send('Lien invalide ou expiré');
-    }
-
-    try {
-        const response = await fetch(entry.githubUrl);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        res.setHeader('Content-Type', entry.mime);
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(entry.filename)}"`);
-        
-        // ✅ FIX: convertir en buffer au lieu de .pipe()
         const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        res.send(buffer);
-        
+        res.send(Buffer.from(arrayBuffer));
+
     } catch (err) {
         console.error('❌ Erreur proxy:', err.message);
-        res.status(502).send('Erreur lors de la récupération du fichier');
+        res.status(502).send('Erreur: ' + err.message);
     }
 });
 
