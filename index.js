@@ -19,7 +19,7 @@ function generateShortCode() {
     return crypto.randomBytes(6).toString('base64url');
 }
 
-// Upload vers Catbox (node-fetch + buffer)
+// Upload vers Catbox (avec fs.createReadStream)
 async function uploadToCatbox(filePath, originalName) {
     const fileExt = path.extname(originalName).toLowerCase();
 
@@ -38,19 +38,18 @@ async function uploadToCatbox(filePath, originalName) {
     else if (fileExt === '.css') contentType = 'text/css';
     else if (fileExt === '.pdf') contentType = 'application/pdf';
 
-    // Lire en buffer
-    const buffer = fs.readFileSync(filePath);
-
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
-    formData.append('fileToUpload', buffer, {
+    // Utiliser fs.createReadStream au lieu du buffer
+    formData.append('fileToUpload', fs.createReadStream(filePath), {
         filename: originalName,
         contentType: contentType
     });
 
     const response = await fetch('https://catbox.moe/user/api.php', {
         method: 'POST',
-        body: formData
+        body: formData,
+        headers: formData.getHeaders() // Important : ajouter les headers Content-Type avec boundary
     });
 
     const imageUrl = await response.text();
@@ -104,6 +103,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     } catch (err) {
         console.error('Erreur upload:', err);
+        // Nettoyage même en cas d'erreur
+        if (req.file && req.file.path) {
+            fs.unlink(req.file.path, () => {});
+        }
         res.status(500).json({ error: err.message });
     }
 });
