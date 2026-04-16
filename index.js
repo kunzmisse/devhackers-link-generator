@@ -8,7 +8,6 @@ const FormData = require('form-data');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
-
 const linkMap = new Map();
 
 app.use(express.static('public'));
@@ -18,28 +17,39 @@ function generateShortCode() {
     return crypto.randomBytes(6).toString('base64url');
 }
 
-// ⚡ Version
+function sanitizeFilename(filename) {
+    return filename
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9.-]/g, '_')
+        .replace(/__+/g, '_');
+}
+
 async function uploadToCatbox(filePath, originalName) {
-    // Lecture en buffer
     const buffer = fs.readFileSync(filePath);
+    const cleanName = sanitizeFilename(originalName) || 'file.bin';
     
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
-    // IMPORTANT : 3 arguments seulement, pas de 4ème objet
-    formData.append('fileToUpload', buffer, originalName);
+    formData.append('fileToUpload', buffer, cleanName);
 
     const response = await fetch('https://catbox.moe/user/api.php', {
         method: 'POST',
-        body: formData
-        // PAS de headers supplémentaires
+        body: formData,
+        headers: {
+            ...formData.getHeaders(),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
     });
 
     const result = await response.text();
     if (!result || !result.startsWith('http')) {
-        throw new Error(result || 'Upload failed');
+        throw new Error(`Catbox error: ${result}`);
     }
     return result.trim();
 }
+
+//
 
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
