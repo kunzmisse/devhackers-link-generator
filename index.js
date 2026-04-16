@@ -1,14 +1,22 @@
+// index.js
 const express = require('express');
 const multer = require('multer');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
-const FormData = require('form-data');
+const { Octokit } = require('@octokit/rest');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 const linkMap = new Map();
+
+// Configuration GitHub
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_OWNER = 'toge021';
+const GITHUB_REPO = 'Media';
+const GITHUB_BRANCH = 'main';
+
+const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
 app.use(express.static('public'));
 app.use(express.json());
@@ -25,37 +33,58 @@ function sanitizeFilename(filename) {
         .replace(/__+/g, '_');
 }
 
-async function uploadToCatbox(filePath, originalName) {
-    const buffer = fs.readFileSync(filePath);
-    const cleanName = sanitizeFilename(originalName) || 'file.bin';
-    
-    const formData = new FormData();
-    formData.append('reqtype', 'fileupload');
-    formData.append('fileToUpload', buffer, cleanName);
-
-    const response = await fetch('https://catbox.moe/user/api.php', {
-        method: 'POST',
-        body: formData,
-        headers: {
-            ...formData.getHeaders(),
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-    });
-
-    const result = await response.text();
-    if (!result || !result.startsWith('http')) {
-        throw new Error(`Catbox error: ${result}`);
-    }
-    return result.trim();
+function generateObfuscatedPath(originalName) {
+    const ext = path.extname(originalName);
+    const randomName = crypto.randomBytes(16).toString('hex');
+    return `uploads/${randomName}${ext}`;
 }
 
-//
+async function uploadToGitHub(filePath, originalName) {
+    const buffer = fs.readFileSync(filePath);
+    const content = buffer.toString('base64');
+    const cleanName = sanitizeFilename(originalName) || 'file.bin';
+    const obfuscatedPath = generateObfuscatedPath(cleanName);
+    
+    try {
+        // Vérifier si le fichier existe déjà
+        let sha = null;
+        try {
+            const existingFile = await octokit.repos.getContent({
+                owner: GITHUB_OWNER,
+                repo: GITHUB_REPO,
+                path: obfuscatedPath,
+                ref: GITHUB_BRANCH
+            });
+            sha = existingFile.data.sha;
+        } catch (e) {
+            // Fichier n'existe pas, on continue
+        }
 
+        // Upload du fichier
+        const response = await octokit.repos.createOrUpdateFileContents({
+            owner: GITHUB_OWNER,
+            repo: GITHUB_REPO,
+            path: obfuscatedPath,
+            message: `Upload: ${cleanName}`,
+            content: content,
+            branch: GITHUB_BRANCH,
+            sha: sha
+        });
+
+        // Construire l'URL brute GitHub
+        const rawUrl = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${obfuscatedPath}`;
+        return rawUrl;
+    } catch (err) {
+        throw new Error(`GitHub upload error: ${err.message}`);
+    }
+}
+
+// Route d'upload
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
 
-        const catboxUrl = await uploadToCatbox(req.file.path, req.file.originalname);
+        const githubUrl = await uploadToGitHub(req.file.path, req.file.originalname);
         const shortCode = generateShortCode();
         const fileExt = path.extname(req.file.originalname).toLowerCase();
 
@@ -75,7 +104,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         else if (fileExt === '.pdf') mime = 'application/pdf';
 
         linkMap.set(shortCode, {
-            catboxUrl: catboxUrl,
+            githubUrl: githubUrl,
             mime: mime,
             filename: req.file.originalname
         });
@@ -95,13 +124,14 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
+// Route proxy pour masquer la source GitHub
 app.get('/f/:code/:filename?', async (req, res) => {
     const code = req.params.code;
     const entry = linkMap.get(code);
     if (!entry) return res.status(404).send('Lien invalide ou expiré');
 
     try {
-        const response = await fetch(entry.catboxUrl);
+        const response = await fetch(entry.githubUrl);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         res.setHeader('Content-Type', entry.mime);
