@@ -49,11 +49,12 @@ function sanitizeFilename(filename) {
         .replace(/__+/g, '_');
 }
 
+// ULTRA COURT - nom de fichier de seulement 4 caractères hexadécimaux!
 function generateObfuscatedPath(originalName) {
     const ext = path.extname(originalName);
-    const randomName = crypto.randomBytes(16).toString('hex');
-    // Changé de 'uploads/' à 'media/' pour éviter confusion
-    return `media/${randomName}${ext}`;
+    // 2 bytes = 4 caractères hexadécimaux (65536 combinaisons possibles)
+    const shortName = crypto.randomBytes(2).toString('hex');
+    return `m/${shortName}${ext}`;
 }
 
 async function uploadToGitHub(filePath, originalName) {
@@ -114,9 +115,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
         if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
 
+        // URL ultra courte! Juste /f/{encoded}
         res.json({
             success: true,
-            shortUrl: `/f/${encoded}/${encodeURIComponent(req.file.originalname)}`,
+            shortUrl: `/f/${encoded}`,
             originalName: req.file.originalname
         });
 
@@ -126,8 +128,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// Route proxy - décode l'URL GitHub depuis le shortCode
-app.get('/f/:encoded/:filename?', async (req, res) => {
+// Route proxy - décode l'URL GitHub depuis le shortCode (sans paramètre filename)
+app.get('/f/:encoded', async (req, res) => {
     try {
         const githubUrl = Buffer.from(req.params.encoded, 'base64url').toString('utf8');
         
@@ -136,7 +138,10 @@ app.get('/f/:encoded/:filename?', async (req, res) => {
             return res.status(400).send('Lien invalide');
         }
 
-        const filename = req.params.filename ? decodeURIComponent(req.params.filename) : 'file';
+        // Extraire le nom du fichier depuis l'URL GitHub
+        const urlParts = githubUrl.split('/');
+        const fullFilename = urlParts[urlParts.length - 1];
+        const filename = decodeURIComponent(fullFilename);
         const fileExt = path.extname(filename).toLowerCase();
 
         let mime = 'application/octet-stream';
