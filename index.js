@@ -174,7 +174,12 @@ app.get('/f/:code/:filename?', async (req, res) => {
         
         res.setHeader('Content-Type', entry.mime);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(entry.filename)}"`);
-        response.body.pipe(res);
+        
+        // ✅ FIX: convertir en buffer au lieu de .pipe()
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        res.send(buffer);
+        
     } catch (err) {
         console.error('❌ Erreur proxy:', err.message);
         res.status(502).send('Erreur lors de la récupération du fichier');
