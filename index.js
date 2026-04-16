@@ -14,38 +14,33 @@ const linkMap = new Map();
 app.use(express.static('public'));
 app.use(express.json());
 
-// Générer un code court unique
 function generateShortCode() {
     return crypto.randomBytes(6).toString('base64url');
 }
 
-// Upload vers Catbox (comme dans url.js)
+// ⚡ Version
 async function uploadToCatbox(filePath, originalName) {
-    // Lire le fichier en buffer (comme dans url.js)
+    // Lecture en buffer
     const buffer = fs.readFileSync(filePath);
     
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
-    // Exactement comme dans url.js - sans spécifier contentType et filename
+    // IMPORTANT : 3 arguments seulement, pas de 4ème objet
     formData.append('fileToUpload', buffer, originalName);
 
     const response = await fetch('https://catbox.moe/user/api.php', {
         method: 'POST',
         body: formData
-        // Pas de headers spécifiés - comme dans url.js
+        // PAS de headers supplémentaires
     });
 
-    const imageUrl = await response.text();
-    console.log('Catbox response:', response.status, imageUrl);
-
-    if (!imageUrl || !imageUrl.startsWith('http')) {
-        throw new Error('Échec upload Catbox: ' + imageUrl);
+    const result = await response.text();
+    if (!result || !result.startsWith('http')) {
+        throw new Error(result || 'Upload failed');
     }
-
-    return imageUrl.trim();
+    return result.trim();
 }
 
-// Route upload
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
@@ -75,7 +70,6 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             filename: req.file.originalname
         });
 
-        // Nettoyage fichier temporaire
         fs.unlink(req.file.path, () => {});
 
         res.json({
@@ -86,14 +80,11 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     } catch (err) {
         console.error('Erreur upload:', err);
-        if (req.file && req.file.path) {
-            fs.unlink(req.file.path, () => {});
-        }
+        if (req.file?.path) fs.unlink(req.file.path, () => {});
         res.status(500).json({ error: err.message });
     }
 });
 
-// Proxy transparent
 app.get('/f/:code/:filename?', async (req, res) => {
     const code = req.params.code;
     const entry = linkMap.get(code);
@@ -101,18 +92,11 @@ app.get('/f/:code/:filename?', async (req, res) => {
 
     try {
         const response = await fetch(entry.catboxUrl);
-
-        if (!response.ok) {
-            return res.status(502).send('Erreur récupération fichier: ' + response.status);
-        }
-
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
         res.setHeader('Content-Type', entry.mime);
-        res.setHeader(
-            'Content-Disposition',
-            `inline; filename="${encodeURIComponent(entry.filename)}"`
-        );
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(entry.filename)}"`);
         response.body.pipe(res);
-
     } catch (err) {
         console.error('Erreur proxy:', err.message);
         res.status(502).send('Erreur lors de la récupération du fichier');
